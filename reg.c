@@ -170,6 +170,7 @@ Ptrlist *patch(Ptrlist *l, State *s){
 	}
 }
 
+/* 将两组悬挂指针连接在一起 */
 Ptrlist *append(Ptrlist *l1, Ptrlist *l2){
 	Ptrlist *oldl1;
 	
@@ -191,6 +192,10 @@ Frag frag(State *start, Ptrlist *out){
 	return n;
 }
 
+/*
+ * Convert postfix regular expression to NFA.
+ * Return start state.
+ */
 State *post2nfa(char *postfix){
 	char *p;
 	Frag stack[1000], *stackp, e1, e2, e;
@@ -215,21 +220,23 @@ State *post2nfa(char *postfix){
 				s = state(Split, e1.start, e2.start);
 				push(frag(s, append(e1.out, e2.out)));
 				break;
-			case '+':
+			case '+':	// one or more
 				e = pop();
 				s = state(Split, e.start, NULL);
 				patch(e.out, s);
 				push(frag(e.start, list1(&s->out1)));
-			case '*':
+				break;
+			case '*':	// zero or more
 				e = pop();
 				s = state(Split, e.start, NULL);
 				patch(e.out, s);
 				push(frag(s, list1(&s->out1)));
 				break;
-			case '?':
+			case '?':	// zero or one 
 				e = pop();
 				s = state(Split, e.start, NULL);
-				push(frag(s, list1(&s->out1)));
+				// 这里注意要将e.out也加到悬挂指针的集合里去 
+				push(frag(s, append(e.out, list1(&s->out1))));
 				break;
 			default:
 				s = state(*p, NULL, NULL);
@@ -238,6 +245,7 @@ State *post2nfa(char *postfix){
 		}
 	}
 	
+	// 注意最后将所有的悬挂指针连接到“匹配状态” 
 	e = pop();
 	patch(e.out, &matchstate);
 	return e.start;
@@ -247,12 +255,17 @@ State *post2nfa(char *postfix){
 
 typedef struct List List;
 struct List{
+	// 其实就是个Set 
 	State **s;
 	int n;
 };
 List l1, l2;
 static int listid;
 
+void addstate(List *l, State *s);
+void step(List *clist, int c, List *nlist);
+
+/* 初始化一个集合，往里面加入一个初始状态start */
 List *startList(State *start, List *l){
 	l->n = 0;
 	listid++;
@@ -260,15 +273,71 @@ List *startList(State *start, List *l){
 	return l;
 }
 
+/* 往集合里添加非Split的状态 */
 void addstate(List *l, State *s){
 	if(s == NULL || s->lastlist == listid)
 		return;
-		
+	
+	s->lastlist = listid;
+	if(s->c == Split){
+		/* Split其实是个空状态，负责转移的 */
+		addstate(l, s->out);
+		addstate(l, s->out1);
+		return;
+	}
+	
 	l->s[l->n++] = s;
 }
 
+/* start是nfa的起始状态，s是要匹配的字符串 */
+int match(State *start, char *s){
+	List *clist, *nlist, *t;
+	clist = startList(start, &l1);
+	nlist = &l2;
+	for(; *s; s++){
+		step(clist, *s, nlist);
+		t = clist; clist = nlist; nlist = t;
+	}
+	return ismatch(clist);
+}
+
+/* 检测最终是否刚好匹配到matchstate */
+int ismatch(List *l){
+	int i;
+	
+	for(i = 0; i < l->n; i++){
+		if(l->s[i] == &matchstate){
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void step(List *clist, int c, List *nlist){
+	int i;
+	State *s;
+	
+	/* 每前进一步产生一组新的状态集合 */	
+	listid++;
+	nlist->n = 0;
+	for(i = 0; i < clist->n; i++){
+		s = clist->s[i];
+		if(s->c == c){
+			addstate(nlist, s->out);
+		}
+	}
+}
+
 int main(){
-	reg2post("a(bb)+a|ab|ac");
+	//reg2post("a(bb)+a|ab|ac");
 	//abb.+.a.
-	printf("%s\n", reg2post("a(bb)+a"));
+	//printf("%s\n", reg2post("a(bb)+a"));
+	char *post = reg2post("a+b");
+	printf("%s\n", post);
+	State *nfa = post2nfa(post);
+	l1.s = malloc(nstate*sizeof(State*));
+	l2.s = malloc(nstate*sizeof(State*));
+	if(match(nfa, "b")){
+		printf("match ok!");
+	}
 }
